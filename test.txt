@@ -7,3 +7,5 @@ one more line in master
 add one more line
 
 more line
+
+add a new line
