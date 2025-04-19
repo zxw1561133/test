@@ -67,15 +67,17 @@ class DropdownMenu(AxesWidget):
         arrow = "▼" if not self.is_open else "▲"
         self.button_ax.text(0.95, 0.5, arrow, ha='right', va='center', fontsize=9)
         
-        # 设置边框
+        # 设置更明显的边框和背景颜色
+        self.button_ax.patch.set_facecolor('skyblue' if not self.is_open else 'lightgreen')
+        self.button_ax.patch.set_alpha(0.9)
         self.button_ax.spines['top'].set_color('navy')
         self.button_ax.spines['bottom'].set_color('navy')
         self.button_ax.spines['left'].set_color('navy')
         self.button_ax.spines['right'].set_color('navy')
-        self.button_ax.spines['top'].set_linewidth(1)
-        self.button_ax.spines['bottom'].set_linewidth(1)
-        self.button_ax.spines['left'].set_linewidth(1)
-        self.button_ax.spines['right'].set_linewidth(1)
+        self.button_ax.spines['top'].set_linewidth(2)
+        self.button_ax.spines['bottom'].set_linewidth(2)
+        self.button_ax.spines['left'].set_linewidth(2)
+        self.button_ax.spines['right'].set_linewidth(2)
         
         self.fig.canvas.draw_idle()
     
@@ -156,33 +158,49 @@ class DropdownMenu(AxesWidget):
     
     def _on_click(self, event):
         """处理点击事件"""
-        # 检查是否点击在按钮上
-        if event.inaxes == self.button_ax:
-            self.is_open = not self.is_open
-            self._draw_button()
+        print(f"接收到点击事件: {event.inaxes}")
+        if hasattr(event, 'x') and hasattr(event, 'y'):
+            print(f"点击坐标: x={event.x}, y={event.y}")
             
-            if self.is_open:
-                self._draw_options()
-            else:
-                self._clear_options()
-            return
+            # 获取图形转换器
+            trans = self.fig.transFigure.inverted()
+            # 将像素坐标转换为图形坐标
+            x_fig, y_fig = trans.transform((event.x, event.y))
+            print(f"图形坐标: x_fig={x_fig:.4f}, y_fig={y_fig:.4f}")
+            print(f"按钮坐标: x={self.x:.4f}, y={self.y:.4f}, width={self.width:.4f}, height={self.height:.4f}")
+            
+            # 检查是否在按钮区域内
+            if (self.x <= x_fig <= self.x + self.width and 
+                self.y <= y_fig <= self.y + self.height):
+                print(f"点击在按钮区域内！处理下拉菜单打开/关闭操作")
+                self.is_open = not self.is_open
+                self._draw_button()
+                
+                if self.is_open:
+                    self._draw_options()
+                else:
+                    self._clear_options()
+                return
         
         # 检查是否点击在选项上
-        for i, ax in enumerate(self.option_axes):
-            if event.inaxes == ax:
-                old_idx = self.current_idx
-                self.current_idx = i
-                self.is_open = False
-                self._draw_button()
-                self._clear_options()
-                
-                # 调用回调函数
-                if self.callback and old_idx != self.current_idx:
-                    self.callback(self.options[self.current_idx])
-                return
+        if hasattr(event, 'inaxes') and event.inaxes is not None:
+            for i, ax in enumerate(self.option_axes):
+                if event.inaxes == ax:
+                    print(f"选择选项: {self.options[i]}")
+                    old_idx = self.current_idx
+                    self.current_idx = i
+                    self.is_open = False
+                    self._draw_button()
+                    self._clear_options()
+                    
+                    # 调用回调函数
+                    if self.callback and old_idx != self.current_idx:
+                        self.callback(self.options[self.current_idx])
+                    return
         
         # 如果点击在其他地方，关闭下拉菜单
         if self.is_open:
+            print("点击在其他区域，关闭下拉菜单")
             self.is_open = False
             self._draw_button()
             self._clear_options()
@@ -445,6 +463,8 @@ risk_ground_markers = []    # 风险区域在地面上的位点标记
 risk_laser_lines = []       # 风险发布飞机到地面的激光光束线
 risk_cones = []             # 从地面点到风险圆高度的圆锥体
 ref_point_markers = []      # 参考轨迹点标记
+type_dropdown = None        # 放大视图类型下拉菜单
+id_dropdown = None          # 放大视图ID下拉菜单
 
 # 获取所有唯一的平台ID
 platform_ids = df['platformId'].unique()
@@ -458,13 +478,23 @@ TARGET_RADIUS = 1200
 
 # 创建图形和子图布局
 if ZOOM_VIEW_ENABLED:
-    # 如果启用了放大视图，创建左右布局
+    # 如果启用了放大视图，创建左右布局，但保留顶部空间给控制面板
     fig = plt.figure(figsize=(16, 10), dpi=100)
-    # 左侧主3D视图
-    ax = fig.add_subplot(121, projection='3d')
-    # 右侧放大视图 - 使用2D视图
-    zoom_ax = fig.add_subplot(122)  # 移除3D投影
-    zoom_ax.set_title('Zoom View - 2D', fontsize=14)
+    
+    # 定义子图位置和尺寸 - 根据用户草图调整为三区域布局
+    left_plot_left = 0.05   # 左侧3D视图左边距
+    left_plot_width = 0.28  # 左侧3D视图宽度
+    right_plot_left = 0.38  # 中间2D视图左边距
+    right_plot_width = 0.28 # 中间2D视图宽度
+    plots_bottom = 0.15    # 视图底部边距，留出空间给播放控制
+    plots_height = 0.75     # 视图高度
+    
+    # 创建两个独立的轴区域，而不是使用add_subplot的网格规范
+    ax = fig.add_axes([left_plot_left, plots_bottom, left_plot_width, plots_height], projection='3d')
+    zoom_ax = fig.add_axes([right_plot_left, plots_bottom, right_plot_width, plots_height])
+    
+    # 设置放大视图标题和比例
+    zoom_ax.set_title('Zoom View (2D)', fontsize=14, pad=10)
     zoom_ax.set_aspect('equal')  # 保持坐标轴比例一致
 else:
     # 如果没启用放大视图，只有一个3D视图
@@ -570,62 +600,228 @@ time_text = ax.text2D(0.02, 0.95, '', transform=ax.transAxes, fontsize=12, bbox=
 # ax.legend(loc='upper right', fontsize=10)
 
 # 添加坐标系说明
-ax.text2D(0.98, 0.02, 'NED Coordinate System with Altitude', transform=ax.transAxes, 
-        horizontalalignment='right', fontsize=10, bbox=dict(facecolor='white', alpha=0.7))
+# ax.text2D(0.98, 0.02, 'NED Coordinate System with Altitude', transform=ax.transAxes, 
+#         horizontalalignment='right', fontsize=10, bbox=dict(facecolor='white', alpha=0.7))
 
 # 添加控件
-# 滑动条
-ax_slider = plt.axes([0.15, 0.01, 0.7, 0.03])
+# 滑动条 - 位于底部中央
+slider_bottom = 0.06  # 滑动条底部位置
+slider_left = 0.15    # 滑动条左侧位置
+slider_width = 0.7    # 滑动条宽度
+slider_height = 0.03  # 滑动条高度
+ax_slider = plt.axes([slider_left, slider_bottom, slider_width, slider_height])
 frame_slider = Slider(ax_slider, 'Frame', 0, len(unique_times)-1, valinit=0, valstep=1)
 
-# 按钮
+# 播放控制按钮 - 保持在底部上方
 btn_color = 'lightblue'
 hover_color = 'skyblue'
-ax_backward = plt.axes([0.15, 0.07, 0.1, 0.03])
+btn_width = 0.1
+btn_height = 0.03
+btn_bottom = 0.10    # 按钮底部位置，在滑动条上方
+ax_backward = plt.axes([0.30, btn_bottom, btn_width, btn_height])
+ax_toggle = plt.axes([0.42, btn_bottom, btn_width, btn_height])
+ax_forward = plt.axes([0.54, btn_bottom, btn_width, btn_height])
 btn_backward = Button(ax_backward, 'Backward', color=btn_color, hovercolor=hover_color)
-ax_toggle = plt.axes([0.27, 0.07, 0.1, 0.03])
 btn_toggle = Button(ax_toggle, 'Play', color=btn_color, hovercolor=hover_color)
-ax_forward = plt.axes([0.39, 0.07, 0.1, 0.03])
 btn_forward = Button(ax_forward, 'Forward', color=btn_color, hovercolor=hover_color)
 
+# 创建控制面板 - 放在右侧空白区域
+panel_width = 0.25    # 控制面板宽度
+panel_height = 0.75   # 控制面板高度，与视图区域同高
+panel_left = 0.71     # 控制面板左侧位置
+panel_bottom = plots_bottom  # 控制面板底部位置，与视图区域对齐
+
+# 控制面板背景
+panel_rect = Rectangle((panel_left, panel_bottom), panel_width, panel_height,
+                      transform=fig.transFigure,
+                      facecolor="whitesmoke", alpha=0.3, edgecolor="black", lw=1)
+fig.patches.append(panel_rect)
+fig.text(panel_left + 0.01, panel_bottom + panel_height - 0.04, "Control Panel",
+         transform=fig.transFigure,
+         fontsize=12, fontweight="bold", color="black")
+
+# 步长控制 - 右侧面板顶部
+control_y = panel_bottom + panel_height - 0.09  # 起始y位置
+control_spacing = 0.05  # 控件间距
+control_height = 0.03  # 控件高度
+
 # 步长输入框与"Set"按钮
-ax_textbox = plt.axes([0.60, 0.07, 0.1, 0.03])
+ax_textbox = plt.axes([panel_left + 0.02, control_y, panel_width * 0.5, control_height])
+ax_set = plt.axes([panel_left + panel_width * 0.55, control_y, panel_width * 0.4, control_height])
 text_box = TextBox(ax_textbox, 'Step:', initial=str(frame_step))
-ax_set = plt.axes([0.72, 0.07, 0.1, 0.03])
 btn_set = Button(ax_set, 'Set', color=btn_color, hovercolor=hover_color)
 
 # 轨迹长度输入框与按钮
-ax_trail_textbox = plt.axes([0.60, 0.14, 0.1, 0.03])
+control_y -= control_spacing
+ax_trail_textbox = plt.axes([panel_left + 0.02, control_y, panel_width * 0.5, control_height])
+ax_trail_set = plt.axes([panel_left + panel_width * 0.55, control_y, panel_width * 0.4, control_height])
 trail_text_box = TextBox(ax_trail_textbox, 'Trail:', initial=str(trail_length))
-ax_trail_set = plt.axes([0.72, 0.14, 0.1, 0.03])
 btn_trail_set = Button(ax_trail_set, 'Set', color=btn_color, hovercolor=hover_color)
 
 # 视图切换按钮
-ax_view = plt.axes([0.60, 0.11, 0.22, 0.03])
+control_y -= control_spacing
+ax_view = plt.axes([panel_left + 0.02, control_y, panel_width * 0.95, control_height])
 view_button = Button(ax_view, 'Switch View', color=btn_color, hovercolor=hover_color)
 
+# 分隔线
+control_y -= control_spacing * 0.7
+fig.text(panel_left + 0.02, control_y, "Display Options", 
+         transform=fig.transFigure,
+         fontsize=10, fontweight="bold", color="black")
+
+# 显示选项复选框
+control_y -= control_spacing * 0.7
+control_box_height = 0.04
+
 # 航向角显示开关
-ax_heading = plt.axes([0.60, 0.18, 0.22, 0.03])
+ax_heading = plt.axes([panel_left + 0.02, control_y, panel_width * 0.95, control_box_height])
 heading_check = CheckButtons(ax_heading, ['Show Heading'], [show_heading])
 
 # nextPoint显示开关
-ax_nextpoint = plt.axes([0.60, 0.22, 0.22, 0.03])
+control_y -= control_spacing
+ax_nextpoint = plt.axes([panel_left + 0.02, control_y, panel_width * 0.95, control_box_height])
 nextpoint_check = CheckButtons(ax_nextpoint, ['Show NextPoint'], [show_nextpoint])
 
-# 添加风险信息显示开关
-ax_risk = plt.axes([0.60, 0.26, 0.22, 0.03])
-risk_check = CheckButtons(ax_risk, ['Show Risk Points & Circles'], [show_risk])
+# 风险信息显示开关
+control_y -= control_spacing
+ax_risk = plt.axes([panel_left + 0.02, control_y, panel_width * 0.95, control_box_height])
+risk_check = CheckButtons(ax_risk, ['Show Risk Info'], [show_risk])
 
-# 添加参考轨迹点显示开关
-ax_ref = plt.axes([0.60, 0.30, 0.22, 0.03])
+# 参考轨迹点显示开关
+control_y -= control_spacing
+ax_ref = plt.axes([panel_left + 0.02, control_y, panel_width * 0.95, control_box_height])
 ref_check = CheckButtons(ax_ref, ['Show Reference Points'], [show_ref_points])
 
-# 控件背景，调整高度
-params_rect = Rectangle((0.56, 0.05), 0.29, 0.35, transform=fig.transFigure,
-                        facecolor="whitesmoke", alpha=0.3, edgecolor="black", lw=1)
-fig.patches.append(params_rect)
-fig.text(0.57, 0.37, "Params Setting", transform=fig.transFigure,
+# 在UI布局代码之前添加放大视图控制的回调函数定义
+
+# 放大视图配置变更回调函数
+def on_type_change(selected_option):
+    global ZOOM_TARGET_TYPE
+    # 更新目标类型
+    if selected_option == 'Host':
+        ZOOM_TARGET_TYPE = 'host'
+        id_dropdown.set_visible(False)
+    elif selected_option == 'Neighbor':
+        ZOOM_TARGET_TYPE = 'neighbor'
+        # 更新ID下拉菜单选项为可用的邻居平台ID
+        neighbor_ids = [f"ID: {int(pid)}" for pid in platform_ids if pid != 101]
+        if neighbor_ids:
+            id_dropdown.set_options(neighbor_ids)
+            id_dropdown.set_visible(True)
+            # 设置ZOOM_TARGET_ID为第一个邻居ID
+            ZOOM_TARGET_ID = platform_ids[platform_ids != 101][0] if len(platform_ids[platform_ids != 101]) > 0 else 101
+        else:
+            id_dropdown.set_options(["No neighbors available"])
+            id_dropdown.set_visible(True)
+    elif selected_option == 'Risk Reporter':
+        ZOOM_TARGET_TYPE = 'risk_reporter'
+        # 更新ID下拉菜单选项为可用的风险发布者ID
+        if risk_df is not None and 'riskID' in risk_df.columns:
+            reporter_ids = sorted(list(set([f"ID: {int(rid)}" for rid in risk_df['riskID'].dropna().unique()])))
+            if reporter_ids:
+                id_dropdown.set_options(reporter_ids)
+                id_dropdown.set_visible(True)
+                # 设置ZOOM_TARGET_ID为第一个风险发布者ID
+                ZOOM_TARGET_ID = int(risk_df['riskID'].dropna().unique()[0])
+            else:
+                id_dropdown.set_options(["No reporters available"])
+                id_dropdown.set_visible(True)
+        else:
+            id_dropdown.set_options(["No risk data"])
+            id_dropdown.set_visible(True)
+    elif selected_option == 'Ground':
+        ZOOM_TARGET_TYPE = 'ground'
+        id_dropdown.set_visible(False)
+    
+    # 更新当前帧以应用变更
+    update(cur_frame)
+    fig.canvas.draw_idle()
+
+def on_id_change(selected_option):
+    global ZOOM_TARGET_ID
+    # 从选项文本中提取ID数字
+    try:
+        id_value = int(selected_option.split(': ')[1])
+        ZOOM_TARGET_ID = id_value
+        # 更新当前帧以应用变更
+        update(cur_frame)
+        fig.canvas.draw_idle()
+    except:
+        pass
+
+def zoom_range_submit(text):
+    set_zoom_range(text)
+
+def zoom_range_set(event):
+    set_zoom_range(zoom_range_box.text)
+
+# 设置放大视图范围函数
+def set_zoom_range(new_range):
+    global ZOOM_RANGE
+    try:
+        val = float(new_range)
+        if val <= 0:
+            val = 500
+        ZOOM_RANGE = val
+        update(cur_frame)
+        fig.canvas.draw_idle()
+    except ValueError:
+        pass
+
+# 添加放大视图控制UI - 位置调整到与Display Options区域间隔明确
+# 放大视图控制设置部分
+control_y -= control_spacing * 1.5  # 与上面的控件保持明确间距
+zoom_section_y = control_y
+fig.text(panel_left + 0.02, zoom_section_y, "Zoom View Settings", 
+         transform=fig.transFigure,
          fontsize=10, fontweight="bold", color="black")
+
+# 放大视图类型选择下拉菜单
+control_y -= control_spacing * 0.7
+type_options = ['Host', 'Neighbor', 'Risk Reporter', 'Ground']
+type_initial = 0  # 默认选择Host
+
+# 控件位置和大小
+dropdown_x = panel_left + 0.02
+dropdown_y = control_y
+dropdown_width = panel_width * 0.95  # 宽度与其他控件一致
+dropdown_height = 0.03  # 与其他控件高度保持一致
+
+# 为放大视图控制区域创建相应的控件
+# 注意：type_dropdown和id_dropdown已经在全局变量中声明
+type_dropdown = DropdownMenu(fig, dropdown_x, dropdown_y, 
+                         dropdown_width, dropdown_height,
+                         type_options, type_initial, 
+                         label='Target Type: ', callback=on_type_change)
+
+# ID选项下拉菜单 - 位置向下偏移
+control_y -= control_spacing * 1.2  # 增加间距，确保下拉菜单不会遮挡
+id_dropdown = DropdownMenu(fig, dropdown_x, control_y, 
+                         dropdown_width, dropdown_height,
+                         ["Select ID"], 0, 
+                         label='Target ID: ', callback=on_id_change)
+id_dropdown.set_visible(False)  # 默认隐藏
+
+# 放大视图范围输入框 - 继续向下偏移
+control_y -= control_spacing * 1.2  # 增加间距
+ax_zoom_range_box = plt.axes([panel_left + 0.02, control_y, panel_width * 0.5, control_height])
+ax_zoom_set = plt.axes([panel_left + panel_width * 0.55, control_y, panel_width * 0.4, control_height])
+zoom_range_box = TextBox(ax_zoom_range_box, 'Range (m):', initial=str(ZOOM_RANGE))
+btn_zoom_set = Button(ax_zoom_set, 'Set', color=btn_color, hovercolor=hover_color)
+
+# 风险信息区域 - 放在控制面板内，底部区域
+risk_section_y = control_y - control_spacing * 2  # 与上面控件保持足够间距
+fig.text(panel_left + 0.02, risk_section_y, "Risk Information", 
+         transform=fig.transFigure,
+         fontsize=10, fontweight="bold", color="black")
+
+# 风险信息显示区域背景 - 高度适当调整确保不超出面板
+risk_section_height = min(0.20, risk_section_y - panel_bottom - 0.02)  # 确保不超出底部
+risk_info_rect = Rectangle((panel_left + 0.01, panel_bottom + 0.02), 
+                          panel_width - 0.02, risk_section_height, 
+                          transform=fig.transFigure,
+                          facecolor="white", alpha=0.3, edgecolor="gray", lw=1)
+fig.patches.append(risk_info_rect)
 
 # 添加经纬度到NED坐标的转换函数
 def geo_to_ned(lat, lon, alt, ref_lat, ref_lon, ref_alt):
@@ -900,19 +1096,6 @@ def update_zoom_target(target_type, target_id=None):
     update(cur_frame)
     fig.canvas.draw_idle()
 
-# 设置放大视图范围函数
-def set_zoom_range(new_range):
-    global ZOOM_RANGE
-    try:
-        val = float(new_range)
-        if val <= 0:
-            val = 500
-        ZOOM_RANGE = val
-        update(cur_frame)
-        fig.canvas.draw_idle()
-    except ValueError:
-        pass
-
 # 更新函数
 def update(frame_idx):
     global cur_frame, view_mode, frame_update_flag, target_circles, heading_arrows, nextpoint_arrows
@@ -1114,7 +1297,7 @@ def update(frame_idx):
         zoom_target_north = None  # 放大目标北向位置
         zoom_target_alt = None   # 放大目标高度
         
-        for i, pid in enumerate(platform_ids):
+    for i, pid in enumerate(platform_ids):
             # 获取当前平台和时间的数据
             mask = (df['platformId'] == pid) & (df['time'] <= t)
             if np.any(mask):
@@ -1312,183 +1495,186 @@ def update(frame_idx):
         # 风险信息距离数据收集
         risk_distance_info = []
         if risk_df is not None:
-            # 获取当前时间的风险信息
-            risk_data = risk_df[risk_df['time'] == t]
-            
-            # 找到本平台数据（假设本平台ID为101）以获取高度信息
-            host_platform_id = 101
-            host_data = df[(df['platformId'] == host_platform_id) & (df['time'] == t)]
-            host_alt = Z_DISPLAY_MIN  # 默认高度
-            if len(host_data) > 0:
-                host_alt = host_data['altitude'].values[0]
-            
-            if len(risk_data) > 0:
-                for idx, row in risk_data.iterrows():
-                    risk_type = row['risk_type']
-                    
-                    # 获取距离信息（如果有）
-                    if 'distanceToObst' in row and not pd.isna(row['distanceToObst']):
-                        dist = row['distanceToObst']
-                        risk_name = ""
-                        
-                        # 根据风险类型设置不同的名称
-                        if risk_type == 0:
-                            risk_name = "Risk Aircraft"
-                        elif risk_type == 1:
-                            risk_name = "Risk Area"
-                        elif risk_type == 2:
-                            risk_name = "Risk Point"
-                        
-                        # 记录到列表中
-                        risk_distance_info.append(f"{risk_name} {idx}: {dist:.1f}m")
-                    
-                    # 根据风险类型绘制不同的标记（使用闪烁）
-                    # show_risk控制风险飞机和风险点的显示
-                    if risk_type != 1 and blink_status and show_risk:  # 非风险区域类型使用闪烁
-                        # 避碰风险飞机 (risk_type = 0)
-                        if risk_type == 0:
-                            east = row['pos_1']  # 调整坐标以匹配平台数据的显示方式
-                            north = row['pos_0']
-                            alt = REF_ALT + row['pos_2']  # 调整高度
-                            
-                            # 使用小圆点标记表示风险飞机，与风险点一致
-                            marker, = ax.plot([east], [north], [alt], '.', color='red', 
-                                            markersize=10, alpha=1.0, zorder=2000)
-                            risk_aircraft_markers.append(marker)
-                            
-                        # 风险点 (risk_type = 2)
-                        elif risk_type == 2:
-                            east = row['pos_1']
-                            north = row['pos_0']
-                            alt = REF_ALT + row['pos_2']  # 调整高度
-                            
-                            # 使用小圆点标记表示风险点，闪烁显示
-                            marker, = ax.plot([east], [north], [alt], '.', color='red', 
-                                             markersize=10, alpha=1.0, zorder=1900)
-                            risk_point_markers.append(marker)
-                    
-                    # 风险区域圆 (risk_type = 1)：根据show_risk控制，但圆锥体等始终显示
-                    if risk_type == 1:
-                        # 获取风险区域的数据
-                        center_east = row['pos_1']
-                        center_north = row['pos_0']
-                        radius = row['pos_2']  # 风险圆半径
-                        
-                        # 绘制风险区域圆 - 空心圆，高度在本平台高度上（受show_risk和闪烁控制）
-                        if show_risk and blink_status:
-                            circle_x, circle_y, circle_z = create_circle_3d(
-                                center_east, center_north, host_alt, radius)
-                            circle, = ax.plot(circle_x, circle_y, circle_z, '-', color='red', 
-                                             linewidth=2, alpha=0.8, zorder=1500)
-                            risk_circle_objects.append(circle)
-                        
-                        # 在地面上添加风险区域位点 - 始终显示
-                        ground_marker, = ax.plot([center_east], [center_north], [Z_DISPLAY_MIN], 
-                                               '.', color='darkred', markersize=5, alpha=1.0, zorder=1200)
-                        risk_ground_markers.append(ground_marker)
-                        
-                        # 检查是否是地面放大目标
-                        if ZOOM_VIEW_ENABLED and ZOOM_TARGET_TYPE == 'ground':
-                            zoom_target_east = center_east
-                            zoom_target_north = center_north
-                            zoom_target_alt = Z_DISPLAY_MIN
-                        
-                        # 添加从地面点到风险圆高度的倒圆锥 - 始终显示，使用15度半开角
-                        cone_top_z = host_alt * 1.2  # 圆锥体顶部高度
-                        height_diff = cone_top_z - Z_DISPLAY_MIN  # 高度差
-                        cone_half_angle = 15 * np.pi / 180  # 15度半开角转换为弧度
-                        cone_base_radius = height_diff * np.tan(cone_half_angle)  # 基于15度半开角计算底部半径
-                        
-                        cone_verts = create_cone_3d(
-                            center_east, center_north, Z_DISPLAY_MIN,  # 顶点（地面点）
-                            center_east, center_north, cone_top_z,  # 底面圆心（风险圆高度上方20%）
-                            cone_base_radius,  # 基于15度半开角计算的底部半径
-                            resolution=20
-                        )
-                        cone = Poly3DCollection(cone_verts, alpha=0.5, linewidth=0, edgecolor='none', 
-                                               facecolor='lightblue', zorder=1000)
-                        ax.add_collection3d(cone)
-                        risk_cones.append(cone)
-                        
-                        # 绘制发布风险信息的飞机位置及轨迹 - 始终显示
-                        if 'cmd_0' in row and 'cmd_1' in row and 'cmd_2' in row and 'riskID' in row:
-                            if not pd.isna(row['cmd_0']) and not pd.isna(row['cmd_1']) and not pd.isna(row['cmd_2']) and not pd.isna(row['riskID']):
-                                # 获取经纬度和高度数据
-                                reporter_lat = row['cmd_0']  # 纬度坐标 
-                                reporter_lon = row['cmd_1']  # 经度坐标
-                                reporter_alt = row['cmd_2']  # 高度 - 直接使用
-                                reporter_id = row['riskID']  # 发布风险信息的飞机ID
-                                
-                                # 将经纬度转换为NED坐标系
-                                north, east, _ = geo_to_ned(
-                                    reporter_lat, reporter_lon, 0,  # 高度参数给0，因为我们不使用计算出的down值
-                                    REF_LAT, REF_LON, REF_ALT
-                                )
-                                
-                                # 记录历史位置
-                                reporter_id_str = str(int(reporter_id))
-                                if reporter_id_str not in risk_reporter_history:
-                                    risk_reporter_history[reporter_id_str] = {}
-                                    # 创建一条新的轨迹线 - 使用紫色
-                                    ln, = ax.plot([], [], [], '-', color='purple', linewidth=2, zorder=1000)
-                                    risk_reporter_lines[reporter_id_str] = ln
-                                
-                                # 记录当前时间点的位置
-                                risk_reporter_history[reporter_id_str][t] = [east, north, reporter_alt]
-                                
-                                # 检查是否是风险发布者放大目标
-                                if ZOOM_VIEW_ENABLED and ZOOM_TARGET_TYPE == 'risk_reporter' and int(reporter_id) == ZOOM_TARGET_ID:
-                                    zoom_target_east = east
-                                    zoom_target_north = north
-                                    zoom_target_alt = reporter_alt
-                                
-                                # 收集历史轨迹
-                                reporter_times = sorted([time_val for time_val in risk_reporter_history[reporter_id_str].keys() if time_val <= t])
-                                
-                                # 应用轨迹长度限制 - 使用更长的风险发布飞机轨迹长度
-                                current_time_idx = np.where(unique_times == t)[0][0]
-                                start_time_idx = max(0, current_time_idx - risk_reporter_trail_length)
-                                if start_time_idx < len(unique_times):
-                                    start_time = unique_times[start_time_idx]
-                                    reporter_times = [time_val for time_val in reporter_times if time_val >= start_time]
-                                
-                                if reporter_times:
-                                    # 提取历史轨迹坐标
-                                    east_hist = []
-                                    north_hist = []
-                                    alt_hist = []
-                                    
-                                    for time_val in reporter_times:
-                                        e, n, a = risk_reporter_history[reporter_id_str][time_val]
-                                        east_hist.append(e)
-                                        north_hist.append(n)
-                                        alt_hist.append(a)
-                                    
-                                    # 更新轨迹线
-                                    risk_reporter_lines[reporter_id_str].set_data(east_hist, north_hist)
-                                    risk_reporter_lines[reporter_id_str].set_3d_properties(alt_hist)
-                                    
-                                    # 使用当前位置绘制标记 - 使用紫色
-                                    reporter_marker, = ax.plot([east], [north], [reporter_alt], 
-                                                              'o', color='purple', markersize=8, alpha=1.0, zorder=1000)
-                                    risk_reporter_markers.append(reporter_marker)
-                                    
-                                    # 添加激光光束连线 - 从飞机位置到地面点，使用青色并添加发光效果
-                                    laser_line, = ax.plot([east, center_east], [north, center_north], 
-                                                         [reporter_alt, Z_DISPLAY_MIN], ':', color='cyan', 
-                                                         linewidth=3, alpha=0.7, zorder=1100)
-                                    risk_laser_lines.append(laser_line)
+            try:
+                # 获取当前时间的风险信息
+                risk_data = risk_df[risk_df['time'] == t]
                 
-                # 创建风险距离信息显示区域
-                if risk_distance_info:
-                    # 增加表头
-                    risk_distance_text_content = "Risk Distances:\n" + "\n".join(risk_distance_info)
-                    # 在图形右侧创建一个文本框
-                    risk_distance_text = fig.text(0.87, 0.6, risk_distance_text_content,
-                                                 transform=fig.transFigure,
-                                                 fontsize=9, verticalalignment='top',
-                                                 bbox=dict(facecolor='white', alpha=0.7, 
-                                                          edgecolor='black', boxstyle='round'))
+                # 找到本平台数据（假设本平台ID为101）以获取高度信息
+                host_platform_id = 101
+                host_data = df[(df['platformId'] == host_platform_id) & (df['time'] == t)]
+                host_alt = Z_DISPLAY_MIN  # 默认高度
+                if len(host_data) > 0:
+                    host_alt = host_data['altitude'].values[0]
+                
+                if len(risk_data) > 0:
+                    for idx, row in risk_data.iterrows():
+                        risk_type = row['risk_type']
+                        
+                        # 获取距离信息（如果有）
+                        if 'distanceToObst' in row and not pd.isna(row['distanceToObst']):
+                            dist = row['distanceToObst']
+                            risk_name = ""
+                            
+                            # 根据风险类型设置不同的名称
+                            if risk_type == 0:
+                                risk_name = "Risk Aircraft"
+                            elif risk_type == 1:
+                                risk_name = "Risk Area"
+                            elif risk_type == 2:
+                                risk_name = "Risk Point"
+                            
+                            # 记录到列表中
+                            risk_distance_info.append(f"{risk_name} {idx}: {dist:.1f}m")
+                        
+                        # 根据风险类型绘制不同的标记（使用闪烁）
+                        # show_risk控制风险飞机和风险点的显示
+                        if risk_type != 1 and blink_status and show_risk:  # 非风险区域类型使用闪烁
+                            # 避碰风险飞机 (risk_type = 0)
+                            if risk_type == 0:
+                                east = row['pos_1']  # 调整坐标以匹配平台数据的显示方式
+                                north = row['pos_0']
+                                alt = REF_ALT + row['pos_2']  # 调整高度
+                                
+                                # 使用小圆点标记表示风险飞机，与风险点一致
+                                marker, = ax.plot([east], [north], [alt], '.', color='red', 
+                                                markersize=10, alpha=1.0, zorder=2000)
+                                risk_aircraft_markers.append(marker)
+                                
+                            # 风险点 (risk_type = 2)
+                            elif risk_type == 2:
+                                east = row['pos_1']
+                                north = row['pos_0']
+                                alt = REF_ALT + row['pos_2']  # 调整高度
+                                
+                                # 使用小圆点标记表示风险点，闪烁显示
+                                marker, = ax.plot([east], [north], [alt], '.', color='red', 
+                                                 markersize=10, alpha=1.0, zorder=1900)
+                                risk_point_markers.append(marker)
+                        
+                        # 风险区域圆 (risk_type = 1)：根据show_risk控制，但圆锥体等始终显示
+                        if risk_type == 1:
+                            # 获取风险区域的数据
+                            center_east = row['pos_1']
+                            center_north = row['pos_0']
+                            radius = row['pos_2']  # 风险圆半径
+                            
+                            # 绘制风险区域圆 - 空心圆，高度在本平台高度上（受show_risk和闪烁控制）
+                            if show_risk and blink_status:
+                                circle_x, circle_y, circle_z = create_circle_3d(
+                                    center_east, center_north, host_alt, radius)
+                                circle, = ax.plot(circle_x, circle_y, circle_z, '-', color='red', 
+                                                 linewidth=2, alpha=0.8, zorder=1500)
+                                risk_circle_objects.append(circle)
+                            
+                            # 在地面上添加风险区域位点 - 始终显示
+                            ground_marker, = ax.plot([center_east], [center_north], [Z_DISPLAY_MIN], 
+                                                   '.', color='darkred', markersize=5, alpha=1.0, zorder=1200)
+                            risk_ground_markers.append(ground_marker)
+                            
+                            # 检查是否是地面放大目标
+                            if ZOOM_VIEW_ENABLED and ZOOM_TARGET_TYPE == 'ground':
+                                zoom_target_east = center_east
+                                zoom_target_north = center_north
+                                zoom_target_alt = Z_DISPLAY_MIN
+                            
+                            # 添加从地面点到风险圆高度的倒圆锥 - 始终显示，使用15度半开角
+                            cone_top_z = host_alt * 1.2  # 圆锥体顶部高度
+                            height_diff = cone_top_z - Z_DISPLAY_MIN  # 高度差
+                            cone_half_angle = 15 * np.pi / 180  # 15度半开角转换为弧度
+                            cone_base_radius = height_diff * np.tan(cone_half_angle)  # 基于15度半开角计算底部半径
+                            
+                            cone_verts = create_cone_3d(
+                                center_east, center_north, Z_DISPLAY_MIN,  # 顶点（地面点）
+                                center_east, center_north, cone_top_z,  # 底面圆心（风险圆高度上方20%）
+                                cone_base_radius,  # 基于15度半开角计算的底部半径
+                                resolution=20
+                            )
+                            cone = Poly3DCollection(cone_verts, alpha=0.5, linewidth=0, edgecolor='none', 
+                                                   facecolor='lightblue', zorder=1000)
+                            ax.add_collection3d(cone)
+                            risk_cones.append(cone)
+                            
+                            # 绘制发布风险信息的飞机位置及轨迹 - 始终显示
+                            if 'cmd_0' in row and 'cmd_1' in row and 'cmd_2' in row and 'riskID' in row:
+                                if not pd.isna(row['cmd_0']) and not pd.isna(row['cmd_1']) and not pd.isna(row['cmd_2']) and not pd.isna(row['riskID']):
+                                    # 获取经纬度和高度数据
+                                    reporter_lat = row['cmd_0']  # 纬度坐标 
+                                    reporter_lon = row['cmd_1']  # 经度坐标
+                                    reporter_alt = row['cmd_2']  # 高度 - 直接使用
+                                    reporter_id = row['riskID']  # 发布风险信息的飞机ID
+                                    
+                                    # 将经纬度转换为NED坐标系
+                                    north, east, _ = geo_to_ned(
+                                        reporter_lat, reporter_lon, 0,  # 高度参数给0，因为我们不使用计算出的down值
+                                        REF_LAT, REF_LON, REF_ALT
+                                    )
+                                    
+                                    # 记录历史位置
+                                    reporter_id_str = str(int(reporter_id))
+                                    if reporter_id_str not in risk_reporter_history:
+                                        risk_reporter_history[reporter_id_str] = {}
+                                        # 创建一条新的轨迹线 - 使用紫色
+                                        ln, = ax.plot([], [], [], '-', color='purple', linewidth=2, zorder=1000)
+                                        risk_reporter_lines[reporter_id_str] = ln
+                                    
+                                    # 记录当前时间点的位置
+                                    risk_reporter_history[reporter_id_str][t] = [east, north, reporter_alt]
+                                    
+                                    # 检查是否是风险发布者放大目标
+                                    if ZOOM_VIEW_ENABLED and ZOOM_TARGET_TYPE == 'risk_reporter' and int(reporter_id) == ZOOM_TARGET_ID:
+                                        zoom_target_east = east
+                                        zoom_target_north = north
+                                        zoom_target_alt = reporter_alt
+                                    
+                                    # 收集历史轨迹
+                                    reporter_times = sorted([time_val for time_val in risk_reporter_history[reporter_id_str].keys() if time_val <= t])
+                                    
+                                    # 应用轨迹长度限制 - 使用更长的风险发布飞机轨迹长度
+                                    current_time_idx = np.where(unique_times == t)[0][0]
+                                    start_time_idx = max(0, current_time_idx - risk_reporter_trail_length)
+                                    if start_time_idx < len(unique_times):
+                                        start_time = unique_times[start_time_idx]
+                                        reporter_times = [time_val for time_val in reporter_times if time_val >= start_time]
+                                    
+                                    if reporter_times:
+                                        # 提取历史轨迹坐标
+                                        east_hist = []
+                                        north_hist = []
+                                        alt_hist = []
+                                        
+                                        for time_val in reporter_times:
+                                            e, n, a = risk_reporter_history[reporter_id_str][time_val]
+                                            east_hist.append(e)
+                                            north_hist.append(n)
+                                            alt_hist.append(a)
+                                        
+                                        # 更新轨迹线
+                                        risk_reporter_lines[reporter_id_str].set_data(east_hist, north_hist)
+                                        risk_reporter_lines[reporter_id_str].set_3d_properties(alt_hist)
+                                        
+                                        # 使用当前位置绘制标记 - 使用紫色
+                                        reporter_marker, = ax.plot([east], [north], [reporter_alt], 
+                                                                  'o', color='purple', markersize=8, alpha=1.0, zorder=1000)
+                                        risk_reporter_markers.append(reporter_marker)
+                                        
+                                        # 添加激光光束连线 - 从飞机位置到地面点，使用青色并添加发光效果
+                                        laser_line, = ax.plot([east, center_east], [north, center_north], 
+                                                             [reporter_alt, Z_DISPLAY_MIN], ':', color='cyan', 
+                                                             linewidth=3, alpha=0.7, zorder=1100)
+                                        risk_laser_lines.append(laser_line)
+                    
+                    # 创建风险距离信息显示区域
+                    if risk_distance_info:
+                        # 增加表头
+                        risk_distance_text_content = "Risk Distances:\n" + "\n".join(risk_distance_info)
+                        # 在控制面板的风险信息区域内创建文本框
+                        risk_distance_text = fig.text(panel_left + 0.02, risk_section_y - 0.05, risk_distance_text_content,
+                                                    transform=fig.transFigure,
+                                                    fontsize=9, verticalalignment='top',
+                                                    bbox=dict(facecolor='white', alpha=0.7, 
+                                                            edgecolor='black', boxstyle='round'))
+            except Exception as e:
+                print(f"Error processing risk data: {e}")
         
         # 绘制参考轨迹点
         if show_ref_points:
@@ -1969,142 +2155,25 @@ platform_handles, platform_labels = ax.get_legend_handles_labels()
 all_handles = platform_handles + legend_elements
 all_labels = platform_labels + [element.get_label() for element in legend_elements]
 
-# 创建整合后的图例，放在右上角
+# 将图例位置调整到3D视图右上角
 legend = ax.legend(all_handles, all_labels, loc='upper right', 
                   fontsize=8,
-                  ncol=3,  # 使用3列显示，可根据需要调整
+                  ncol=2,  # 使用2列显示，适应3D视图的宽度
                   framealpha=0.7)
 
-# 添加风险距离信息显示区域背景
-risk_info_rect = Rectangle((0.84, 0.35), 0.15, 0.30, transform=fig.transFigure,
-                          facecolor="whitesmoke", alpha=0.3, edgecolor="black", lw=1)
-fig.patches.append(risk_info_rect)
-fig.text(0.85, 0.62, "Risk Distance Info", transform=fig.transFigure,
-         fontsize=10, fontweight="bold", color="black")
+# 注：放大视图控制UI已在前面添加
 
-# 添加放大视图控制UI
-if ZOOM_VIEW_ENABLED:
-    # 放大视图类型选择下拉菜单
-    type_options = ['Host', 'Neighbor', 'Risk Reporter', 'Ground']
-    type_initial = 0  # 默认选择Host
-    
-    def on_type_change(selected_option):
-        global ZOOM_TARGET_TYPE
-        # 更新目标类型
-        if selected_option == 'Host':
-            ZOOM_TARGET_TYPE = 'host'
-            id_dropdown.set_visible(False)
-        elif selected_option == 'Neighbor':
-            ZOOM_TARGET_TYPE = 'neighbor'
-            # 更新ID下拉菜单选项为可用的邻居平台ID
-            neighbor_ids = [f"ID: {int(pid)}" for pid in platform_ids if pid != 101]
-            if neighbor_ids:
-                id_dropdown.set_options(neighbor_ids)
-                id_dropdown.set_visible(True)
-                # 设置ZOOM_TARGET_ID为第一个邻居ID
-                ZOOM_TARGET_ID = platform_ids[platform_ids != 101][0] if len(platform_ids[platform_ids != 101]) > 0 else 101
-            else:
-                id_dropdown.set_options(["No neighbors available"])
-                id_dropdown.set_visible(True)
-        elif selected_option == 'Risk Reporter':
-            ZOOM_TARGET_TYPE = 'risk_reporter'
-            # 更新ID下拉菜单选项为可用的风险发布者ID
-            if risk_df is not None and 'riskID' in risk_df.columns:
-                reporter_ids = sorted(list(set([f"ID: {int(rid)}" for rid in risk_df['riskID'].dropna().unique()])))
-                if reporter_ids:
-                    id_dropdown.set_options(reporter_ids)
-                    id_dropdown.set_visible(True)
-                    # 设置ZOOM_TARGET_ID为第一个风险发布者ID
-                    ZOOM_TARGET_ID = int(risk_df['riskID'].dropna().unique()[0])
-                else:
-                    id_dropdown.set_options(["No reporters available"])
-                    id_dropdown.set_visible(True)
-            else:
-                id_dropdown.set_options(["No risk data"])
-                id_dropdown.set_visible(True)
-        elif selected_option == 'Ground':
-            ZOOM_TARGET_TYPE = 'ground'
-            id_dropdown.set_visible(False)
-        
-        # 更新当前帧以应用变更
-        update(cur_frame)
-        fig.canvas.draw_idle()
-    
-    # 创建下拉菜单
-    type_dropdown = DropdownMenu(fig, 0.84, 0.28, 0.15, 0.04, type_options, type_initial, 
-                               label='Target Type: ', callback=on_type_change)
-    
-    # ID选项下拉菜单
-    def on_id_change(selected_option):
-        global ZOOM_TARGET_ID
-        # 从选项文本中提取ID数字
-        try:
-            id_value = int(selected_option.split(': ')[1])
-            ZOOM_TARGET_ID = id_value
-            # 更新当前帧以应用变更
-            update(cur_frame)
-            fig.canvas.draw_idle()
-        except:
-            pass
-    
-    # 创建ID下拉菜单
-    id_dropdown = DropdownMenu(fig, 0.84, 0.22, 0.15, 0.04, ["Select ID"], 0, 
-                             label='Target ID: ', callback=on_id_change)
-    id_dropdown.set_visible(False)  # 默认隐藏
-    
-    # 放大视图范围输入框
-    ax_zoom_range_box = plt.axes([0.84, 0.16, 0.09, 0.03])
-    zoom_range_box = TextBox(ax_zoom_range_box, 'Range (m):', initial=str(ZOOM_RANGE))
-    
-    ax_zoom_set = plt.axes([0.94, 0.16, 0.05, 0.03])
-    btn_zoom_set = Button(ax_zoom_set, 'Set', color=btn_color, hovercolor=hover_color)
-    
-    # 放大范围设置回调
-    def zoom_range_submit(text):
-        set_zoom_range(text)
-
-    def zoom_range_set(event):
-        set_zoom_range(zoom_range_box.text)
-    
-    # 连接放大视图控制回调
-    zoom_range_box.on_submit(zoom_range_submit)
-    btn_zoom_set.on_clicked(zoom_range_set)
-    
-    # 根据初始设置更新ID下拉菜单
-    if ZOOM_TARGET_TYPE == 'host':
-        id_dropdown.set_visible(False)
-    elif ZOOM_TARGET_TYPE == 'neighbor':
-        neighbor_ids = [f"ID: {int(pid)}" for pid in platform_ids if pid != 101]
-        if neighbor_ids:
-            id_dropdown.set_options(neighbor_ids)
-            id_dropdown.set_visible(True)
-    elif ZOOM_TARGET_TYPE == 'risk_reporter':
-        if risk_df is not None and 'riskID' in risk_df.columns:
-            reporter_ids = sorted(list(set([f"ID: {int(rid)}" for rid in risk_df['riskID'].dropna().unique()])))
-            if reporter_ids:
-                id_dropdown.set_options(reporter_ids)
-                id_dropdown.set_visible(True)
-    
-    # 设置类型下拉菜单当前值与ZOOM_TARGET_TYPE一致
-    current_type_idx = 0  # 默认Host
-    if ZOOM_TARGET_TYPE == 'neighbor':
-        current_type_idx = 1
-    elif ZOOM_TARGET_TYPE == 'risk_reporter':
-        current_type_idx = 2
-    elif ZOOM_TARGET_TYPE == 'ground':
-        current_type_idx = 3
-    type_dropdown.current_idx = current_type_idx
-    type_dropdown._draw_button()
-    
-    # 视图控制区域背景 - 调整大小确保包含所有控件
-    zoom_control_rect = Rectangle((0.82, 0.10), 0.17, 0.26, transform=fig.transFigure,
-                             facecolor="whitesmoke", alpha=0.3, edgecolor="black", lw=1)
-    fig.patches.append(zoom_control_rect)
-    fig.text(0.83, 0.33, "Zoom View Control", transform=fig.transFigure,
-             fontsize=10, fontweight="bold", color="black")
+# 连接放大视图控制回调
+zoom_range_box.on_submit(zoom_range_submit)
+btn_zoom_set.on_clicked(zoom_range_set)
 
 plt.tight_layout(rect=[0, 0.05, 1, 1])
 print("准备完成，开始显示...")
+
+# 保存当前UI布局截图用于调试
+plt.savefig('ui_layout_debug.png', dpi=100)
+print("已保存UI调试图像: ui_layout_debug.png")
+
 plt.show()
 
 # 清理资源
