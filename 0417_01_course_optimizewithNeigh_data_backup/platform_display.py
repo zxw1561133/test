@@ -15,6 +15,7 @@ import matplotlib
 matplotlib.rcParams['font.size'] = 9  # 设置全局字体大小
 import matplotlib.gridspec as gridspec
 from matplotlib.widgets import AxesWidget
+from matplotlib.lines import Line2D
 
 # 创建一个下拉菜单类
 class DropdownMenu(AxesWidget):
@@ -564,7 +565,9 @@ for i, pid in enumerate(platform_ids):
 
 # 添加时间文本和图例
 time_text = ax.text2D(0.02, 0.95, '', transform=ax.transAxes, fontsize=12, bbox=dict(facecolor='white', alpha=0.7))
-ax.legend(loc='upper right', fontsize=10)
+
+# 不要在这里创建图例，我们将在后面整合所有图例
+# ax.legend(loc='upper right', fontsize=10)
 
 # 添加坐标系说明
 ax.text2D(0.98, 0.02, 'NED Coordinate System with Altitude', transform=ax.transAxes, 
@@ -1941,9 +1944,36 @@ ani = FuncAnimation(fig, animate, init_func=init, blit=False, interval=100, cach
 # 确保初始帧正确显示
 update(0)
 
-# 添加图例说明
-fig.text(0.02, 0.02, "○: Current Position  *: Target  --: Arrival Area  →: Heading  x: Next Point  •: Risk Info  ○: Risk Reporter  •: Risk Area Ground  ⠇: Cyan Laser  ▽: Risk Cone  ○: Ref Points (Green: Current, Blue: Risk AC, Orange: Risk Area)", 
-         transform=fig.transFigure, fontsize=8, bbox=dict(facecolor='white', alpha=0.7))
+# 创建图例元素
+from matplotlib.lines import Line2D
+legend_elements = [
+    Line2D([0], [0], marker='o', color='w', markerfacecolor='blue', markersize=8, label='Current Position'),
+    Line2D([0], [0], marker='*', color='w', markerfacecolor='green', markersize=8, label='Target'),
+    Line2D([0], [0], linestyle='--', color='green', label='Arrival Area'),
+    Line2D([0], [0], marker='>', color='w', markerfacecolor='blue', markersize=8, label='Heading'),
+    Line2D([0], [0], marker='x', color='blue', linestyle='none', markersize=8, label='Next Point'),
+    Line2D([0], [0], marker='.', color='red', linestyle='none', markersize=10, label='Risk Point'),
+    Line2D([0], [0], marker='o', color='w', markerfacecolor='purple', markersize=8, label='Risk Reporter'),
+    Line2D([0], [0], marker='.', color='darkred', linestyle='none', markersize=8, label='Risk Area Ground'),
+    Line2D([0], [0], linestyle=':', color='cyan', linewidth=2, label='Laser Line'),
+    Line2D([0], [0], marker='^', color='w', markerfacecolor='lightblue', markersize=8, label='Risk Cone'),
+    Line2D([0], [0], marker='o', color='w', markerfacecolor='green', markersize=6, label='Ref Point (Host)'),
+    Line2D([0], [0], marker='o', color='w', markerfacecolor='blue', markersize=6, label='Ref Point (Risk AC)'),
+    Line2D([0], [0], marker='o', color='w', markerfacecolor='orange', markersize=6, label='Ref Point (Risk Area)')
+]
+
+# 获取平台图例句柄和标签
+platform_handles, platform_labels = ax.get_legend_handles_labels()
+
+# 组合所有图例元素
+all_handles = platform_handles + legend_elements
+all_labels = platform_labels + [element.get_label() for element in legend_elements]
+
+# 创建整合后的图例，放在右上角
+legend = ax.legend(all_handles, all_labels, loc='upper right', 
+                  fontsize=8,
+                  ncol=3,  # 使用3列显示，可根据需要调整
+                  framealpha=0.7)
 
 # 添加风险距离信息显示区域背景
 risk_info_rect = Rectangle((0.84, 0.35), 0.15, 0.30, transform=fig.transFigure,
